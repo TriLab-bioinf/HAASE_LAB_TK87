@@ -363,7 +363,6 @@ heatmap_DE <- function(list=list,out=out) {
 }
 
 heatmap_DE(list=DE_results,out="DE")
-p
 ```
 
 
