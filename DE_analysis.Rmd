@@ -144,7 +144,7 @@ p.hm <- pheatmap(sampleDistMatrix,
          clustering_distance_cols=sampleDists,
          color = colorRampPalette(c("red", "white", "blue"))(100))
 
-pdf("./Plots/heat_map.pdf", p.hm,width=8,height=7)
+pdf("./Plots/heat_map.pdf", p.hm,width=8,height=6)
 p.hm
 dev.off()
 
@@ -350,18 +350,20 @@ heatmap_DE <- function(list=list,out=out) {
   rownames(mat) <- filtered_df_wide$gene_ids
 
   mat[is.na(mat)] <- 0
-
-  pdf(paste0("./Plots/pheatmap_",out,".pdf"),p,height=12,width=12)
-  Heatmap(mat, 
+  
+  p <-  Heatmap(mat, 
         name="log2FoldChange",
         show_row_names = FALSE,
         col = colorRamp2(c(-1, 0, 1), c("blue", "white", "red"))
         )
+
+  pdf(paste0("./Plots/pheatmap_",out,".pdf"),p,height=12,width=12)
+  plot(p)
   dev.off()
 }
 
 heatmap_DE(list=DE_results,out="DE")
-
+p
 ```
 
 
