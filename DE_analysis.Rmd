@@ -1,0 +1,458 @@
+---
+title: "RNA-seq analysis of YTHDF2, YTHDF2mut and HEK293"
+author: "Analysis done by Yuejun Wang, TriLab Biounformatic Group"
+output:
+  html_document:
+  pdf_document: default
+  df_print: paged
+gemoetry: margin=1in
+fontsize: 8pt
+fontfamily: mathpazo
+---
+
+\center
+
+
+```{r setup, include=FALSE, message=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, tidy = TRUE)
+```
+
+# Load libraries
+```{r message=FALSE}
+
+options(java.parameters = "-Xmx8000m")
+
+library(tidyverse)
+library(DESeq2)
+library(cowplot)
+library(ggpubr)
+library(RColorBrewer)
+library(pheatmap)
+library(ggsci)
+library(AnnotationDbi)
+library(scales)
+library(org.Hs.eg.db)
+library(xlsx)
+library(r2excel)
+library(ggplot2)
+library(viridis)
+library(RSkittleBrewer)
+library(genefilter)
+library(corrplot)
+library(reshape2)
+library(ComplexHeatmap)
+library(circlize)
+library(VennDiagram)
+library(EnhancedVolcano)
+library(enrichR)
+library(ggthemes)
+trop = RSkittleBrewer('tropical')
+```
+
+# Load aux functions
+```{r}
+source(file = "01_aux_rnaseq_functions.R")
+```
+
+# Load data
+```{r}
+metadata <- as.data.frame(read_tsv(file = "SampleInfo.txt", col_names = TRUE, comment = "#"))
+rownames(metadata) <- metadata$SampleName
+
+
+read_counts <- as.data.frame(read_tsv(file = "/gpfs/gsfs12/users/wangy80/TK87/results/05counts/read_counts", col_names = TRUE, comment = "#"))
+rownames(read_counts) <- read_counts$Geneid # adding gene ids as row names
+
+
+# Rename sample names
+read_counts <- read_counts[,7:length(read_counts)]
+
+colnames(read_counts) <- gsub(".sorted.dedup.bam","",
+                              gsub("results/04dedup/","",
+                                   colnames(read_counts)))
+
+
+# Sort tables so metadata and read counts match order
+read_counts <- read_counts[,match(metadata$SampleName, colnames(read_counts))]
+all(rownames(metadata) == colnames(read_counts))
+
+
+# Round read counts to the closest interger
+read_counts <- round(read_counts, digits = 0)
+
+# include total read counts in metadata
+metadata$read_counts <- colSums(read_counts)
+
+# Rename column names in read_counts based on metadata
+colnames(read_counts) <- rownames(metadata)
+
+write.table(x = metadata, file = "metadata.txt", sep = "\t") 
+```
+
+# DE analysis with DESeq2
+
+```{r}
+dir.create(path = "./Plots", showWarnings = FALSE)
+
+# Converting Time, DMSO and Replicate number to factors
+metadata$class <- as.factor(metadata$Sample)
+metadata$Replicate <- as.factor(metadata$Replicate)
+
+# Adding read_depth in design to control for read_depth
+dds <- DESeqDataSetFromMatrix(countData = read_counts, 
+                              colData = metadata,  
+                              design = ~ Sample)
+
+
+# Plot total reads per sample using barchar
+p <- ggbarplot(data = metadata, 
+          x = "SampleName", 
+          y = "read_counts",
+          x.text.angle = 90,
+          fill = "Sample", 
+          title = "Total read counts per sample", 
+          ylab = "Read counts",
+          sort.by.groups = TRUE,
+          palette = "jco",
+          sort.val = "asc")
+
+ggsave2("Plots/barplot_read_counts_per_sample.pdf", plot = p,width=7,height=6)
+p
+```
+
+
+```{r}
+# Normalize counts
+vsd <- vst(dds, blind=FALSE)
+
+# Keep genes with at least 20 reads total across samples
+keep <- rowSums(counts(dds) >= 10) >= 3
+vsd <- vsd[keep,]
+
+# Calculate distances between samples
+sampleDists <- dist(t(assay(vsd)))
+
+# Plot inter-sample distances
+old.par <- par(no.readonly=T)
+
+sampleDistMatrix <- as.matrix(sampleDists)
+rownames(sampleDistMatrix) <- paste(vsd$SampleName)
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+p.hm <- pheatmap(sampleDistMatrix,
+         clustering_distance_rows=sampleDists,
+         clustering_distance_cols=sampleDists,
+         color = colorRampPalette(c("red", "white", "blue"))(100))
+
+pdf("./Plots/heat_map.pdf", p.hm,width=8,height=7)
+p.hm
+dev.off()
+
+p.hm
+```
+
+
+```{r}
+# PCA
+pcaData <- plotPCA(vsd, intgroup=c("Sample"), returnData=TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+y.coords = c(min(pcaData$PC1, pcaData$PC2), max(pcaData$PC1, pcaData$PC2))
+x.coords = y.coords
+p1 <- ggplot(pcaData, aes(PC1, PC2, color=Sample)) +
+  geom_point() + scale_color_lancet() + 
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+  coord_fixed(ratio = (max(pcaData$PC1)-min(pcaData$PC1))/(max(pcaData$PC2)-min(pcaData$PC2))) 
+
+ggsave("Plots/pca.pdf", plot = p1)
+p1
+
+```
+
+Samples clustered mainly by Sample.
+
+
+# Run DE analysis
+```{r}
+dds <- DESeq(dds)
+
+dir.create(path = "./DE", showWarnings = FALSE)
+
+comparisons <- list(
+c("Sample","YTHDF2mut","HEK293"),
+c("Sample","YTHDF2","HEK293"),
+c("Sample","YTHDF2mut","YTHDF2")
+)
+
+
+########################################################################################################
+# Make function here to compute DE analysis and output results for each comparison above.
+########################################################################################################
+# Define function for processing and saving result tables
+sort_and_write_res_table <- function(result_table, 
+                                     file_name = "TABLE.xlsx", 
+                                     sheet_name = "sheet_1"){
+  dir.create(path = "./DE", showWarnings = FALSE)
+  
+  # add path
+  file_name <- paste0("./DE/",file_name)
+  
+  # Check if an excel spreadsheet already exists, otherwise create one
+  if(file.exists(file_name)){
+    wb <- loadWorkbook(file = file_name)
+  } else {
+    wb <- createWorkbook(type="xlsx")
+  }
+  
+  # # Create new excel sheet, remove sheets if it already exits (if the sheet name is too long, the errors might occur)
+  sheets <- getSheets(wb)
+  if(is.element(sheet_name,names(sheets))){
+    removeSheet(wb, sheetName=sheet_name)
+  }
+  sheet <- createSheet(wb, sheetName = sheet_name)
+
+  # Sort genes by (padj)
+  result_table_sorted <- result_table[order(result_table$padj, decreasing = FALSE),]
+  
+  # Add gene symbols
+  symbol_list <- replace_gene_acc_by_symbol_ids(rownames(result_table_sorted), return_all = TRUE, db = org.Hs.eg.db)
+  result_table_sorted$Gene_name <- symbol_list
+  result_table_sorted <- as.data.frame(result_table_sorted) 
+  
+  # Add df to excel sheet
+  xlsx.addTable(wb = wb, sheet = sheet, data = result_table_sorted, startRow = 1, startCol = 1)
+
+  # Write sorted table to Excel file as different worksheets. Need file name + Worksheet name !!!
+  saveWorkbook(wb, file_name)
+  
+  # Write sorted table to file
+  # write.table(as.data.frame(result_table_sorted), file = paste0("./DE/",file_name,".txt"), sep = "\t", col.names=NA)
+  
+  return(result_table_sorted)
+}
+
+# Using lfcShrink instead of results to reduce high Log2FC bias of genes with low expression
+
+get_deseq_result <- function(dds, contrast, analysis_type = "ashr"){
+  #print(1)
+  if(analysis_type %in% c("ashr","apeglm","normal")){
+    res <- lfcShrink(dds = dds, contrast =list(contrast), type = analysis_type)
+  } else if (analysis_type == "result"){
+    res <- results(object = dds, contrast = contrast, independentFiltering = FALSE)
+  }
+  #print(2)
+  # Replace NAs by 1s
+  res$pvalue[is.na(res$pvalue)] <- 1
+  res$padj[is.na(res$padj)] <- 1
+  #print(3)
+  # Print out summary of results
+  print(contrast)
+  summary(res, alpha = 0.05)
+  #print(4)
+  # Sort result table and save it
+  my_file_name = paste0("DE_",dds$dds_ID[1])
+  #paste0("DE_",paste0(contrast, collapse = "_"),"_",dds$dds_ID[1])
+  
+  my_sheet = paste0(paste0(contrast, collapse = "_"),"_",dds$dds_ID[1])
+  my_sheet = gsub("Sample_","",my_sheet)
+  #print(5)
+  res_sorted <- sort_and_write_res_table(result_table = res, 
+                                         file_name =  paste0(my_file_name,".xlsx"), 
+                                         sheet_name = my_sheet)
+  #print(6)
+  return(res_sorted)
+  
+}
+```
+
+```{r}
+
+DE_results = list()
+for (i in 1:length(comparisons)){
+  print(i)
+  id <- paste0(comparisons[[i]], collapse = "_")
+  DE_results[[id]] <- get_deseq_result(dds = dds, contrast = comparisons[[i]], analysis_type = "result" )
+
+  genes_of_interest <- head(rownames(DE_results[[id]][DE_results[[id]]$padj <= 0.05, ]))
+
+}  
+
+```
+
+# genelists overlap
+
+```{r}
+my_overlap_list <- list()
+for (i in names(DE_results)){
+    DE <- c(rownames(subset(DE_results[[i]], abs(log2FoldChange)>1 & padj <= 0.05)))
+    my_overlap_list[[i]] <- DE
+}
+
+venn.diagram(my_overlap_list,
+             category.names = gsub("Sample_","",names(my_overlap_list)),
+             fill = c("#E69F00", "#56B4E9", "#009E73"),
+             filename="./Plots/venn.png")
+
+```
+
+# Build summary table across contrats
+```{r}
+N <- length(names(DE_results))
+# Initialize table
+my_table <- data.frame(rbind("logFC.up" = rep(0, N), 
+                             "logFC.down" = rep(0, N)
+                             )
+                       ) 
+colnames(my_table) <- names(DE_results)
+
+for (i in names(DE_results)){ 
+  my_table["logFC.up",i] <- table(DE_results[[i]]$padj <= 0.05 & DE_results[[i]]$log2FoldChange > 1)[2]
+  my_table["logFC.down",i] <- table(DE_results[[i]]$padj <= 0.05 & DE_results[[i]]$log2FoldChange < -1)[2]
+}
+
+
+# Replace NA by 0s
+my_table[is.na(my_table )] <- 0
+write.table(x = my_table, file = "DE_summary.txt", sep = "\t", col.names = NA)
+
+```
+
+
+## heatmap for all comparisons on all significant genes detected in at least one comparisons
+
+```{r message=FALSE}
+
+heatmap_DE <- function(list=list,out=out) {
+  list<-lapply(list, function(x) 
+  cbind(x, gene_ids = rownames(x)))
+
+  filter <- function(df) {
+    df[df$padj<=0.05,]
+  }
+
+  # Apply the filter function to each data frame in the list
+  filtered <- lapply(list, filter)
+
+  # Merge the filtered data frames into a single data frame
+  all_sig_genes <- unique((bind_rows(filtered))$gene_ids)
+
+  # Merge data frames by gene_ids
+  merged_df <- bind_rows(list, .id = "comparisons")
+
+  filtered_df <- merged_df[merged_df$gene_ids %in% all_sig_genes, ]
+
+  filtered_df_wide <- pivot_wider(filtered_df[,c(1,3,9)],  names_from = "comparisons", values_from = "log2FoldChange")
+
+
+  # heatmap
+
+  mat <- as.data.frame(filtered_df_wide[,2:ncol(filtered_df_wide)])
+  rownames(mat) <- filtered_df_wide$gene_ids
+
+  mat[is.na(mat)] <- 0
+
+  pdf(paste0("./Plots/pheatmap_",out,".pdf"),p,height=12,width=12)
+  Heatmap(mat, 
+        name="log2FoldChange",
+        show_row_names = FALSE,
+        col = colorRamp2(c(-1, 0, 1), c("blue", "white", "red"))
+        )
+  dev.off()
+}
+
+heatmap_DE(list=DE_results,out="DE")
+
+```
+
+
+### function enrichment
+
+```{r}
+websiteLive <- getOption("enrichR.live")
+setEnrichrSite("Enrichr") # human genes   
+```
+
+### enrichr
+
+```{r}
+
+dbs <- c("GO_Molecular_Function_2023", "GO_Cellular_Component_2023", "GO_Biological_Process_2023","KEGG_2021")
+
+file_name = "Functional_enrichment.xlsx"
+fun_enrich <- function(list=list,out=out){
+    enriched <- enrichr(list, dbs)
+    res <- rbind(enriched[[1]],
+                enriched[[2]],
+                enriched[[3]],
+                enriched[[4]])
+    res2 <- res[which(res$Adjusted.P.value<0.05),]
+    res3 <- res2[order(res2$Adjusted.P.value),]
+    # barplot
+    options(repr.plot.width = 8, repr.plot.height = 6, repr.plot.res = 200)
+    res3$GeneCount <- as.numeric(gsub("/.*$","",res3$Overlap))
+    if(dim(res3)[1]<20){
+      p<-ggplot(data=res3, aes(x=reorder(Term,-Adjusted.P.value), y=GeneCount,fill=Adjusted.P.value)) +
+      geom_bar(stat = "identity")
+    }
+    else {
+      p<-ggplot(data=res3[1:20,], aes(x=reorder(Term,-Adjusted.P.value), y=GeneCount,fill=Adjusted.P.value)) +
+      geom_bar(stat = "identity")
+    }
+   
+    # Horizontal bar plot
+    p2 <- p + coord_flip() + scale_fill_gradient(low = "red", high = "yellow") +theme_few() + xlab('Enriched Terms') +ggtitle(out)
+    ggsave(paste0("Plots/",out,"_top20_barplot.png"),p2,width=12,height=5)
+    
+    # write outputs
+    sheet_name = out
+        # Check if an excel spreadsheet already exists, otherwise create one
+    if(file.exists(file_name)){
+      wb <- loadWorkbook(file = file_name)
+    } else {
+      wb <- createWorkbook(type="xlsx")
+    }
+  
+    # Create new excel sheet, remove sheets if it already exits (if the sheet name is too long, the errors might occur)
+    sheets <- getSheets(wb)
+    if(is.element(sheet_name,names(sheets))){
+      removeSheet(wb, sheetName=sheet_name)
+    }
+    sheet <- createSheet(wb, sheetName = sheet_name)
+    xlsx.addTable(wb = wb, sheet = sheet, data = res3, startRow = 1, startCol = 1)
+    # Write sorted table to Excel file as different worksheets. Need file name + Worksheet name !!!
+    saveWorkbook(wb, file_name)
+}
+
+```
+
+## get protein_coding genes
+
+```{r}
+library(biomaRt)  
+mart <- useMart(biomart = "ENSEMBL_MART_ENSEMBL", dataset = "hsapiens_gene_ensembl", host = 'www.ensembl.org')
+genes <- biomaRt::getBM(attributes = c("external_gene_name", "chromosome_name","transcript_biotype"), filters = c("transcript_biotype","chromosome_name"),values = list("protein_coding",c(1:22,"Mt","X","Y")), mart = mart)
+```
+
+
+```{r}
+up_list <- list()
+for (i in names(DE_results)){
+    DE <- c(rownames(subset(DE_results[[i]],log2FoldChange > 1 & padj <= 0.05)))
+    symbol_list <- replace_gene_acc_by_symbol_ids(DE, return_all = TRUE, db = org.Hs.eg.db)
+    sel <- symbol_list[symbol_list %in% genes$external_gene_name]
+    fun_enrich(sel,paste0(i,"_up"))
+}
+
+down_list <- list()
+for (i in names(DE_results)){
+    DE <- c(rownames(subset(DE_results[[i]],log2FoldChange < -1 & padj <= 0.05)))
+    symbol_list <- replace_gene_acc_by_symbol_ids(DE, return_all = TRUE, db = org.Hs.eg.db)
+    sel <- symbol_list[symbol_list %in% genes$external_gene_name]
+    fun_enrich(sel,paste0(i,"_down"))
+}
+```
+
+
+```{r}
+sessionInfo()
+```
