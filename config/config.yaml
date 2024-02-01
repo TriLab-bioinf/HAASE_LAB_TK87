@@ -1,0 +1,22 @@
+# Metadata
+reference:
+    abundant_rna_file: NA
+    ensembl_ver: r110
+    ensembl_gtf: data/00ref/Homo_sapiens.GRCh38.110.gtf
+    genome_build: human-r110
+    genome_file: data/00ref/Homo_sapiens.GRCh38.dna.primary_assembly.fa
+    star_index: 00ref
+    genome_source: homo_sapiens
+remove_duplicated_reads: false
+star_db:
+    sjdbOverhang: 74
+samples:
+    Sample_1_Cai_S8:
+    Sample_2_Cai_S9:
+    Sample_3_Cai_S10:
+    Sample_4_Cai_S11:
+    Sample_5_Cai_S12:
+    Sample_6_Cai_S13:
+    siCTRL_S1:
+    siCTRL_S2:
+    siCTRL_S3:
